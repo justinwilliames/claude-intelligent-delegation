@@ -540,9 +540,19 @@ cmd_codex() {
     exit 1
   fi
 
-  local log="$(run_dir "$run_id")/$chunk_id/codex.jsonl"
+  local chunk_dir="$(run_dir "$run_id")/$chunk_id"
+  local log="$chunk_dir/codex.jsonl"
+  local prompt_file="$chunk_dir/codex.prompt"
+  local stderr_file="$chunk_dir/codex.stderr"
   local model="${CODEX_MODEL:-gpt-5.5}"
   local effort="${CODEX_EFFORT:-medium}"
+
+  # Feed the prompt via stdin from a tempfile (`-` tells codex to read stdin).
+  # Avoids the argv-quoting bug class — complex prompts with newlines, embedded
+  # quotes, or heredocs can silently fail when passed as a positional arg, and
+  # codex falls through to "read from stdin" and hangs forever. Persisting the
+  # prompt file also makes post-mortem debugging trivial.
+  printf '%s' "$prompt" >"$prompt_file"
 
   local rc=0
   "$CODEX_BIN" exec --skip-git-repo-check --json \
@@ -550,7 +560,7 @@ cmd_codex() {
     -s workspace-write \
     -m "$model" \
     -c "model_reasoning_effort=\"$effort\"" \
-    "$prompt" >"$log" 2>>"$(run_dir "$run_id")/$chunk_id/codex.stderr" || rc=$?
+    - <"$prompt_file" >"$log" 2>>"$stderr_file" || rc=$?
 
   # final agent_message text (last one wins on multi-turn runs)
   jq -r 'select(.type=="item.completed" and .item.type=="agent_message") | .item.text' "$log" 2>/dev/null | tail -n 1
