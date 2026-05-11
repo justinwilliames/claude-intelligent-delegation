@@ -16,7 +16,9 @@ You are the **orchestrator**. Your job: decompose, delegate, collect, verify, pr
 
 | Tier | Model | Session | Use for |
 |------|-------|---------|---------|
-| **Orchestrator** | Opus (main session) | Stays | Decompose, review diffs, QA, talk to the user |
+| **Orchestrator** | Opus (main session) | Stays | Decompose, review diffs, QA, reconcile dual-model reviews, talk to the user |
+| **QA reviewer A** | Opus (fresh subagent) | Subagent | Cold semantic review of an applied major run (Step 10.5) |
+| **QA reviewer B** | Codex GPT-5.5 `--effort high` | Background | Adversarial review of an applied major run, parallel to reviewer A (Step 10.5) |
 | **Planning** | Opus (Plan subagent) | Subagent | Architecture, multi-file refactor design |
 | **Build** | Sonnet (Agent) | Fresh per chunk | Parallel independent implementation chunks |
 | **Precision** | Codex GPT-5.5 | Background | Adversarial review, deep algorithms, second opinions |
@@ -307,13 +309,80 @@ Runs each chunk's `verification` in the project root, then runs `project_verific
 
 If anything fails: show the failure, show the offending chunk's `diff` (`delegate.sh diff "$RUN_ID" <chunk-id>` lists files), ask how to proceed.
 
+### Step 10.5 — Dual-model QA review (major runs)
+
+Mechanical QA (Step 10) verifies that tests pass. It does not verify that the code is **good** — correct, idiomatic, safe, free of subtle bugs, complete. For major runs, a second pass is mandatory: **Opus 4.7 reviews in the main session, Codex GPT-5.5 reviews in a fresh background context, both in parallel, then the orchestrator reconciles and fixes.**
+
+#### When this step fires (the "major" trigger)
+
+Run dual-model review if **any** of the following hold:
+
+| Trigger | Threshold |
+|---------|-----------|
+| Chunk count | ≥3 chunks applied (excluding pure review runs) |
+| Files changed | ≥5 files written to the project |
+| Risk surface | Touches auth, payments, migrations, billing, security, data-loss-capable code paths, or anything user-facing in production |
+| Lines of code | ≥300 net new lines across the run |
+| User flag | User said "high-stakes", "critical", "production", "ship-ready", or explicitly requested review |
+
+For runs that don't trip any trigger (1-2 chunk runs, scratch work, prototypes), skip straight to Step 11. The overhead of dual review is not worth it for trivial work.
+
+**Do NOT skip this step on a major run to "save time".** The reconcile-and-fix loop is exactly where bugs get caught before they ship. Mechanical QA passing is necessary but not sufficient.
+
+#### How to run it
+
+**1. Spawn both reviews in parallel** (same message, two tool calls):
+
+- **Opus review** — Agent tool, `subagent_type="general-purpose"`, no `model=` override (inherits Opus from the orchestrator session). Fresh context window — the subagent has not seen the build conversation, so it reviews the applied code cold. Hand it: the project path, the list of files changed, the original task description, the manifest, and the review dimensions below.
+- **Codex review** — `{base}/../codex/scripts/codex.sh run` with `--effort high --model gpt-5.5`, background. Hand it the same brief. Codex's review writes `review-codex.md` to a temp workspace.
+
+Both reviewers MUST be given:
+- The original task and manifest (so they know what was supposed to be built).
+- The exact list of files changed (so they know where to look).
+- The project path (read-only for both — they do not modify code).
+- The dimensions: **correctness, edge cases, missing tests, security, scalability, conventions, completeness vs. spec**.
+- The output shape: structured findings with severity (`blocker` / `major` / `minor` / `nit`), file:line refs, and a concrete fix recommendation per finding.
+
+Use the review template in `references/prompt-templates.md` (the `/delegate review` template) as the base, adapted for "review this just-applied delegate run" framing.
+
+**2. Collect both reviews.** Read them into the main session. Do NOT have either reviewer fix anything — reviewers review, the orchestrator decides.
+
+**3. Reconcile** in the main session (this is Opus orchestrator work):
+
+| Reconciliation step | What you do |
+|---------------------|-------------|
+| Dedupe | Same issue flagged by both reviewers → single finding with both citations |
+| Resolve conflicts | Reviewers disagree → orchestrator decides, names the reasoning in one line |
+| Prioritise | Sort: blockers → majors → minors → nits |
+| Filter | Drop nits unless trivial to fix; drop findings the user explicitly accepted as out of scope |
+| Produce a reconciled punch list | Markdown, severity-grouped, with file:line refs and the agreed fix per item |
+
+**4. Surface the reconciled list to the user.** Lead with: blockers count, majors count, your recommended action (ship as-is / fix-then-ship / re-architect). Get explicit yes before fixing.
+
+**5. Fix the agreed items.** Use the same delegation calculus:
+- Single-file mechanical fixes → do inline in main session.
+- Multiple independent fixes → fan out via a follow-up `/delegate run` with the punch list as the task.
+- One deep correctness fix → 1-chunk Codex run with `--effort high`.
+
+**6. Re-run mechanical QA** (`delegate.sh qa "$RUN_ID"`) after fixes land. If it fails, loop. If it passes, proceed to Step 11.
+
+**7. Re-review only if blockers were fixed.** If only minors/nits were patched, trust the mechanical QA and move on. Do not infinite-loop the review pass.
+
+#### Anti-patterns specific to this step
+
+- **Skipping reconciliation** — handing two raw review files to the user is lazy and noisy. Reconciliation is the orchestrator's job.
+- **Auto-fixing without confirmation** — even when both reviewers agree, the user gets to see the punch list and approve scope before fixes land. Some findings will be deliberate design choices.
+- **Running both reviews sequentially** — they're independent; parallel is free latency. Same message, two tool calls.
+- **Letting reviewers see each other's output** — model-diversity is the point. Each reviewer must produce findings independently.
+- **Treating Codex's `do-not-ship` verdict as veto** — Codex is opinionated and sometimes wrong. Weigh both reviewers, decide in the main session, be willing to overrule with reasoning.
+
 ### Step 11 — Present
 
 ```bash
 {base}/scripts/delegate.sh summary "$RUN_ID"
 ```
 
-Shows the run header + the full state.tsv as a column-aligned table. Lead the user with: chunks done, files added, QA result, run_id (for resume).
+Shows the run header + the full state.tsv as a column-aligned table. Lead the user with: chunks done, files added, mechanical QA result, dual-review result (if Step 10.5 ran), reconciled findings fixed, run_id (for resume).
 
 ## Resume
 
@@ -353,3 +422,5 @@ Set `DELEGATE_DEBUG=1` to enable an ERR trap that prints the failing line + comm
 - Do NOT use this for conversational tasks or single-file edits — just do them.
 - Do NOT skip `preflight`. Overwriting the user's in-progress work is the worst-case failure mode.
 - Do NOT let chunks write directly into the project path. Workspaces only.
+- Do NOT skip Step 10.5 (dual-model QA review) when a run trips any "major" trigger — chunks ≥3, files ≥5, risk surface, ≥300 LOC, or user-flagged. Mechanical QA passing is necessary, not sufficient.
+- Do NOT auto-apply fixes from the reconciled review punch list. Surface, get approval, then fix.
