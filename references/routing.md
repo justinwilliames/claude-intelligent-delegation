@@ -7,7 +7,9 @@ This document explains how the orchestrator should decide between keeping work i
 | Tier | Model | Primary job | When to use it | What stays in session |
 |------|-------|-------------|----------------|-----------------------|
 | Orchestrator | Opus 4.7 | Planning, decomposition, QA, reporting, user communication | Always. The main session owns the task, writes the manifest, approves fan-out, reviews outputs, and presents the result. | The full task narrative, tradeoffs, manifest state, QA status, and user-facing explanation stay here. |
+| Planning | Opus 4.7 (Plan subagent) | Manifest authoring, decomposition design, multi-file refactor architecture | For non-trivial decompositions (>3 chunks or unfamiliar codebase). Frees the main session from holding planning context while keeping Opus reasoning quality. | Only the final JSON manifest and Opus's review notes stay in the main session. |
 | Build | Sonnet 4.6 subagent in a worktree | Parallel implementation chunks | Use for independent chunks that touch multiple files, follow repo conventions, and should land as mergeable diffs. This is the default worker for real build work. | Only the chunk prompt, the worktree branch, and the chunk result live in the subagent. Main-session knowledge does not automatically carry over. |
+| Integration | Opus 4.7 (main session, in-line) | Integration glue, cross-cutting edits, sibling-chunk coordination | Chunks that genuinely need orchestrator context — package.json edits, root config changes, glue between sibling chunks. Use sparingly: most chunks should be `sonnet-subagent`. | The full chunk implementation lives in-session since it executes in-context. |
 | Precision | Codex GPT-5.5 | Deep precision work, adversarial review, second opinion | Use when you want a different model family, a skeptical review, a narrowly scoped algorithmic fix, or a careful pass over a risky integration point. | Codex reads the repo fresh. The main session should keep only the ask, the returned result, and any review findings. |
 | Lookup | Haiku 4.5 explore subagent | Fast file discovery and lightweight searches | Use for grep-like tasks, symbol discovery, finding entry points, or locating candidate files before deciding where build work belongs. | Only the extracted facts and file paths should be carried back. Haiku should not own implementation context. |
 
@@ -110,6 +112,18 @@ Use this table after you have already decided that a chunk should not stay in th
 - You want adversarial review before or after integration.
 - The risky part is narrow but subtle.
 - You need a direct, highly scoped ask without loading a large narrative.
+
+## Single-chunk delegation
+
+A 1-chunk delegation to Sonnet or Codex is a valid pattern when the goal is a *fresh context window* — not parallelism. Parallelism is an optimisation; fresh-context is the primary value of delegation.
+
+Use single-chunk delegation when:
+
+- **Deep refactor in one module** (Sonnet) — when the work would burn 40%+ of main-session context, a fresh Sonnet subagent gives clean cache and reasoning space.
+- **Adversarial review of one file or plan** (Codex, `--effort high`) — different model family, skeptical perspective, narrow scope. This is the `/delegate review` use case.
+- **Any single task >40% of remaining main-session budget** — the overhead of fan-out is justified by the context relief, even with no sibling chunks.
+
+Decision rule: if the task would force the main session to read 5+ files or hold a 500+ line working set, delegate it — even as a single chunk.
 
 ## Anti-Patterns
 

@@ -1,278 +1,199 @@
 # Chunk Prompt Templates
 
-This document defines the prompt structure for each runner type. The prompts should not sound literary. They should be concrete, bounded, and operational.
+Every chunk prompt — Sonnet subagent or Codex — must be **self-contained**. The runner has no memory of the orchestrator's conversation, no knowledge of the broader plan, and (critically) no idea where to write its output unless you tell it. Templates here are the canonical shape.
 
-The most important rule is this:
+## The workspace contract
 
-- Sonnet subagents do not see the main session.
+Every chunk writes to its own `workspace/` directory under the run dir. The orchestrator copies `workspace/` contents into the project after audit. Two non-negotiable rules:
 
-That means every Sonnet chunk prompt must be fully self-contained. If the prompt omits a constraint, a file boundary, a verification command, or critical project context, the worker does not have it.
+1. **Relative paths only inside the workspace.** A chunk creating `src/foo.ts` writes to `<workspace>/src/foo.ts`. Never `<project>/src/foo.ts`.
+2. **The project is read-only context.** Chunks may read files at the project path to understand existing code, but they MUST NOT write there.
 
-Codex prompts can be shorter because Codex will inspect files directly. Main chunks are not prompts at all; they are imperative instructions the orchestrator executes itself after fan-out returns.
-
-## Sonnet Subagent Template
-
-Use this for implementation chunks executed in isolated worktrees.
-
-### Required structure
-
-```text
-You are implementing one chunk of a larger delegated task in an isolated git worktree.
-
-Task context:
-- <overall feature or refactor goal>
-- <why this chunk exists in the larger task>
-
-Specific intent for this chunk:
-- <exact outcome this chunk must achieve>
-
-Files to touch:
-- <path> - <why this file belongs to the chunk>
-- <path> - <why this file belongs to the chunk>
-
-Files not to touch:
-- <path or subsystem to avoid>
-- <path or subsystem to avoid>
-
-Project context:
-- Language: <language>
-- Framework: <framework>
-- Test runner: <test runner>
-- Build or package tool: <tool if relevant>
-
-Constraints:
-- Follow existing project conventions.
-- Keep the change scoped to this chunk.
-- Do not make unrelated refactors.
-- If you discover a blocker outside the allowed files, report it instead of expanding scope.
-
-Verification command:
-- <command>
-
-Definition of done:
-- <specific outcome 1>
-- <specific outcome 2>
-- <tests or checks expected to pass>
-
-Output:
-- Summarize what changed.
-- List the files changed.
-- Report whether the verification command passed.
+The orchestrator resolves the absolute workspace path before launching:
+```bash
+WS=$({base}/scripts/delegate.sh workspace "$RUN_ID" chunk-1)
 ```
 
-### Why this structure matters
+## Sonnet subagent template
 
-- Task context tells the worker how the chunk fits into the bigger job.
-- Specific intent prevents the worker from "helpfully" broadening scope.
-- Files to touch and files not to touch create ownership boundaries.
-- Project context reduces bad assumptions about language, framework, and test tooling.
-- Definition of done makes evaluation concrete.
+```
+You are implementing chunk <ID> of a delegated build.
 
-## Filled-In Sonnet Example 1
+PROJECT (read-only context — do not modify):
+  <absolute project path>
 
-```text
-You are implementing one chunk of a larger delegated task in an isolated git worktree.
+WORKSPACE (write all outputs here, using relative paths):
+  <absolute workspace path>
 
-Task context:
-- The overall task is to add organization-scoped API tokens for admins.
-- This chunk owns the backend issuance and revocation flow so the UI and audit work can build on a stable server contract.
+INTENT:
+  <chunk.intent verbatim>
 
-Specific intent for this chunk:
-- Implement organization token creation, revocation, persistence, and server-side tests.
+FILES TO CREATE (relative to WORKSPACE):
+  - <files_touched[0]>
+  - <files_touched[1]>
+  …
 
-Files to touch:
-- server/services/orgTokenService.ts - core token creation and revocation logic belongs here
-- server/routes/orgTokens.ts - admin HTTP endpoints belong here
-- server/routes/orgTokens.test.ts - route-level verification belongs here
+CONSTRAINTS:
+  - Only create the files listed above. Do not produce any other file inside WORKSPACE.
+  - You may read files from PROJECT to understand conventions, types, fixtures.
+  - Do not run package installs, do not modify the project, do not invoke git.
+  - Use the project's existing language conventions, module style, and import patterns.
 
-Files not to touch:
-- web/src/pages/OrgTokens.tsx
-- web/src/components
-- docs/
+VERIFICATION:
+  After writing, run from WORKSPACE:
+    <verification command, adapted to run against workspace files>
+  Confirm it passes before finishing.
 
-Project context:
-- Language: TypeScript
-- Framework: Node.js with Express-style route modules
-- Test runner: Vitest
-- Build or package tool: pnpm
-
-Constraints:
-- Follow existing route and service conventions in the repo.
-- Keep the scope limited to backend token behavior.
-- Do not add frontend code or documentation changes.
-- If you need a new shared type outside these files, report it instead of expanding broadly.
-
-Verification command:
-- pnpm test server/routes/orgTokens.test.ts
-
-Definition of done:
-- Admin routes exist for create and revoke operations.
-- Token secrets are not exposed beyond the intended response surface.
-- Route tests cover success and failure paths.
-- The verification command passes.
-
-Output:
-- Summarize what changed.
-- List the files changed.
-- Report whether the verification command passed.
+FINAL MESSAGE:
+  Report: (1) file list, (2) one-line test summary, (3) any deviation from the intent.
 ```
 
-## Filled-In Sonnet Example 2
-
-```text
-You are implementing one chunk of a larger delegated task in an isolated git worktree.
-
-Task context:
-- The overall task is to add a notification preference toggle to user settings.
-- This chunk owns the UI that consumes an already-planned backend route.
-
-Specific intent for this chunk:
-- Add a settings toggle component that loads and updates the user's notification preference using the backend API.
-
-Files to touch:
-- web/src/pages/Settings.tsx - existing settings page wiring belongs here
-- web/src/components/NotificationPreferenceToggle.tsx - new toggle UI belongs here
-- web/src/components/NotificationPreferenceToggle.test.tsx - component coverage belongs here
-
-Files not to touch:
-- server/routes/userPreferences.ts
-- server/models
-- docs/
-
-Project context:
-- Language: TypeScript
-- Framework: React
-- Test runner: Vitest with Testing Library
-- Build or package tool: pnpm
-
-Constraints:
-- Match existing settings-page patterns and component style.
-- Keep API assumptions aligned with the backend route contract.
-- Do not refactor unrelated settings components.
-- If the backend contract is missing, report the blocker instead of guessing broadly.
-
-Verification command:
-- pnpm test web/src/components/NotificationPreferenceToggle.test.tsx
-
-Definition of done:
-- The toggle renders on the settings page.
-- The component loads the current preference and can submit an updated value.
-- The component test covers fetch, update, and error handling states.
-- The verification command passes.
-
-Output:
-- Summarize what changed.
-- List the files changed.
-- Report whether the verification command passed.
+Launch (background, fresh-cache):
+```python
+Agent(
+  subagent_type="general-purpose",
+  model="sonnet",
+  run_in_background=True,
+  prompt="<filled template above>",
+)
 ```
 
-## Codex Template
+## Codex template
 
-Codex prompts should be shorter and more direct. Codex will inspect the repo itself, so you do not need to inline as much context. The prompt should still be bounded.
+Codex is opinionated and minimal. Lead with the contract, then the intent:
 
-### Required structure
+```
+Chunk <ID> of a delegated build.
 
-```text
-Directory: <repo path>
+WORKSPACE (write here, relative paths only): <absolute workspace path>
+PROJECT (read-only context): <absolute project path>
 
-Ask:
-- <specific implementation or review request>
+Create exactly these files inside WORKSPACE:
+  <files_touched list>
 
-Constraints:
-- <scope boundary>
-- <anything to avoid>
-- <quality bar or review posture>
+INTENT: <chunk.intent>
 
-Expected output:
-- <patch, review notes, risk list, or other exact output shape>
+Do not write outside WORKSPACE. Do not invoke git. After writing, run the
+verification command from WORKSPACE and confirm it passes:
+  <verification command>
+
+Report the file list and test summary.
 ```
 
-### Why this structure works
-
-- `Directory` tells Codex where to operate.
-- `Ask` states the actual job without narrative overhead.
-- `Constraints` limit scope and prevent broad repo churn.
-- `Expected output` prevents ambiguity about whether you want code, a review, or both.
-
-## Filled-In Codex Example 1
-
-```text
-Directory: /project
-
-Ask:
-- Review the integrated billing refactor for hidden coupling between invoice calculation and payment gateway side effects.
-
-Constraints:
-- Focus on src/billing/invoiceEngine.ts, src/billing/paymentGateway.ts, and src/billing/processCharge.ts.
-- Do not rewrite the feature unless a minimal patch is clearly needed.
-- Prioritize transaction boundaries, error propagation, and missing tests.
-
-Expected output:
-- A concise review report with concrete findings, file references, and a minimal patch only if one issue is straightforward to fix.
+Launch:
+```bash
+{base}/../codex/scripts/codex.sh run "<prompt>" \
+  --dir "$WS" \
+  --sandbox workspace-write \
+  --effort medium
 ```
 
-## Filled-In Codex Example 2
+`workspace-write` confines writes to `--dir` (the chunk workspace).
 
-```text
-Directory: /project
+## Review-mode template (Codex, `/delegate review`)
 
-Ask:
-- Implement a narrowly scoped fix for token redaction so secret values are never logged from the organization token service.
+Review mode is a 1-chunk Codex run that produces a `review.md` artefact instead of code files. Use case: adversarial second opinion on an Opus-authored plan, draft, integration approach, or risky algorithm. Codex with `--effort high` gives model-family diversity and a sceptical perspective.
 
-Constraints:
-- Limit changes to the token service and the closest relevant tests.
-- Preserve existing logging structure where possible.
-- Avoid unrelated refactors.
+### When to use review mode
 
-Expected output:
-- A small patch with updated tests and a short note describing what changed and how it was verified.
+- Reviewing an Opus-authored implementation plan before fan-out.
+- Sanity-checking a risky integration point (auth, payments, migration logic).
+- Getting a second opinion on a critical algorithm before shipping.
+- Adversarial pass on a finished diff to find missing tests / edge cases.
+
+Do **not** use review mode for: trivial code review (Sonnet does this fine), conversational questions, or anything that doesn't merit a different model family's perspective.
+
+### Template
+
+```
+You are reviewing chunk <ID> of a delegated build. This is REVIEW MODE — you do not modify code, you produce a written review.
+
+WORKSPACE (write your review here, single file only): <absolute workspace path>
+PROJECT (read-only context): <absolute project path>
+
+DRAFT UNDER REVIEW:
+  <inline plan text, OR a file path inside PROJECT, OR a description of the artefact>
+
+REVIEW SCOPE (dimensions to check):
+  - Correctness — does the design / code do what it claims?
+  - Edge cases — what inputs / states are unhandled?
+  - Missing tests — what should be tested that isn't?
+  - Scalability — what breaks at 10x / 100x volume?
+  - Security — any injection / auth / secret-leak risks?
+  - Conventions — does it follow the project's existing patterns?
+
+OUTPUT:
+  Write `review.md` in WORKSPACE with these sections (use markdown):
+
+  # Review: <title>
+
+  ## Summary
+  One-paragraph verdict. Lead with: ship-as-is / ship-with-fixes / do-not-ship.
+
+  ## Strengths
+  What the draft gets right. Specific, not generic praise.
+
+  ## Risks
+  Concrete failure modes, ordered by severity. Each risk: what breaks, under what conditions, how likely.
+
+  ## Missing pieces
+  Tests, error handling, edge cases, documentation — anything the draft skips that it shouldn't.
+
+  ## Recommended changes
+  Prioritised list. Each item: what to change, why, rough effort estimate (small/medium/large).
+
+  Do not modify any project files. Do not write outside WORKSPACE.
 ```
 
-## Main Chunk Template
+### Launch
 
-`main` chunks are not prompts. They are imperative instructions carried out by the orchestrator directly after fan-out returns.
-
-Use a `main` chunk when:
-- The work depends on seeing the combined result of earlier chunks.
-- The step is too small or too integration-specific to justify another worker.
-- The orchestrator should retain direct control of the final action.
-
-### Required structure
-
-```text
-Main chunk instructions:
-1. <direct action>
-2. <direct action>
-3. <verification or reporting action>
+```bash
+{base}/../codex/scripts/codex.sh run "<filled review prompt>" \
+  --dir "$WS" \
+  --sandbox workspace-write \
+  --effort high \
+  --model gpt-5.5
 ```
 
-Write these as explicit instructions, not as open-ended goals.
+`--effort high` is the default for review mode (deeper reasoning matters more than speed for second-opinion work).
 
-## Filled-In Main Example 1
+### Manifest shape
 
-```text
-Main chunk instructions:
-1. Merge the completed backend and UI token chunks into the integration branch.
-2. Update docs/admin/org-tokens.md so it matches the merged route names and UI labels.
-3. Run pnpm build and report whether the integration branch is ready for QA sign-off.
+Review-mode manifests have a single chunk:
+
+```json
+{
+  "id": "review",
+  "title": "review <subject>",
+  "intent": "<what to review and against what dimensions>",
+  "files_touched": ["review.md"],
+  "runner": "codex",
+  "verification": ""
+}
 ```
 
-## Filled-In Main Example 2
+The orchestrator **skips the apply step** for review runs — `review.md` stays in the workspace. The summary phase prints its contents (or a path link) to the user.
 
-```text
-Main chunk instructions:
-1. After the Sonnet implementation chunks land, apply the small config wiring change in config/featureFlags.ts.
-2. Verify the new notification preference flag is enabled only for the intended environment.
-3. Run pnpm test web/src/components/NotificationPreferenceToggle.test.tsx and summarize the final integrated state.
-```
+## Adapting verification to workspace
 
-## Prompt Quality Checklist
+Chunks ship with `verification` written for the **project root**. To run it in the workspace, the chunk must either:
 
-Before sending any chunk prompt, check:
-- Does the runner actually match the type of work?
-- Is the scope narrow enough to own cleanly?
-- Are file boundaries explicit?
-- Is the verification command real and relevant?
-- For Sonnet, could a fresh worker succeed with only the prompt text and the repo?
+- Run with imports that resolve within the workspace (typical for self-contained test files importing siblings).
+- Use absolute imports back into the project (uncommon — usually only when the chunk extends an existing module).
 
-If the answer to the last question is no, the prompt is not ready.
+In practice: most chunks have purely local imports (`./foo.js` to `./foo.test.js`), and `node --test src/*.test.js` runs identically in workspace or project. If a chunk needs project-level resolution the workspace can't satisfy, defer verification to the post-`apply` QA gate and omit chunk-level `verification`.
+
+## What never to put in a chunk prompt
+
+- "Coordinate with chunk-2 about X" — chunks must not depend on sibling state.
+- "Update package.json to add Y" — package-level changes belong in their own chunk with `runner: main`.
+- "Choose between A and B" — chunks are deterministic execution units, not design discussions. Design decisions belong in the orchestrator turn, before fan-out.
+- Conversation history, prior turns, or "as we discussed". The chunk has no memory.
+
+## Failure handling
+
+If a chunk reports failure or its verification fails:
+1. Orchestrator sets `status=failed`, `result=<one-line error>`.
+2. Orchestrator does NOT auto-retry.
+3. Surface to the user: chunk id, intent, error, suggested fix.
+4. If the user approves, re-run via `/delegate resume <run-id>` after fixing the chunk's source state.
