@@ -45,17 +45,52 @@ The orchestrator must proactively suggest a handoff when it detects diminishing 
 | Context window | **>75%** full | Suggest handoff immediately — before the next fan-out or QA gate |
 | Mid-run stall | Collect phase done, QA not started, session feels stale | Suggest handoff before QA |
 | Repeated clarifications | Same question asked / context re-explained 2+ times | Stop and suggest handoff |
+| User says "handoff" | Explicit | Always produce the prompt block |
 
-**How to surface it:**
+**How to surface it — always inline, always copyable:**
 
-1. Say clearly: *"Sir, we're at X% context — I'd suggest starting a fresh session for the QA / next phase. Here's your transfer prompt:"*
-2. Run:
-   ```bash
-   {base}/scripts/delegate.sh handoff <run-id>
-   ```
-3. Paste the output block into the chat. The user copies it into a new session and `/delegate` picks up from the right step.
+Say clearly: *"Sir, here's your transfer prompt — paste this into a new session:"*
 
-The `handoff` subcommand reads `state.tsv` + `manifest.json` and emits a self-contained brief — task, project path, run-id, per-chunk statuses, and the exact next step to execute. The new session needs no prior conversation context.
+Then produce a fenced code block containing the self-contained prompt. The user copies it and pastes it as the first message in a new session. No files to read, no scripts to run, no setup.
+
+**Transfer prompt format:**
+
+~~~
+```
+Pick up where the last session left off. Here's the full context:
+
+## What was done
+<bullet list — shipped features, confirmed facts, dead ends proven>
+
+## Current state
+<what exists now, what version shipped, what's live>
+
+## Next action
+<single concrete first step — tool call, command, or decision>
+
+## Open unknowns
+<what hasn't been verified yet, what could break>
+
+## Key files
+<file path — what's relevant about it>
+<file path — what's relevant about it>
+
+## Dead ends — do not retry
+<approach — why it fails>
+```
+~~~
+
+Keep it tight enough to paste without hesitation. If there's a delegate run in progress, add:
+
+```
+## Delegate run
+run_id: <run-id>
+project: <path>
+pending chunks: <ids>
+next step: /delegate resume <run-id>
+```
+
+**The rule:** every handoff lives in the chat as a copyable block. No file, no script, no "go read HANDOFF.md". The prompt IS the handoff.
 
 ## Context Budget Rules
 
