@@ -539,7 +539,27 @@ Set `DELEGATE_DEBUG=1` to enable an ERR trap that prints the failing line + comm
 
 **Desktop ↔ CLI parity (confirmed May 2026).** Claude Code Desktop (Mac/Windows app) and the terminal CLI both support: the Agent / `subagent_type` tool, `~/.claude/skills/`, hooks, MCP servers, CLAUDE.md inheritance. This skill works identically on both surfaces — same triage, same fan-out, same QA gates. Documented Desktop gaps that affect this skill: no `--model` / `--permission-mode` flags exposed at launch, no autonomous `/loop` runs. None of those block the skill's core flow.
 
-**Agent Teams (experimental, shipped Feb 2026).** For multi-session orchestration beyond same-process subagents, Anthropic ships **Agent Teams**: a lead agent coordinating independent teammate *instances* via shared task lists and mailbox-style inter-agent messaging. Enable with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Use case: builds large enough that each chunk wants its own full Claude Code session — separate hooks, separate MCP, full independent context budget — rather than a sub-agent context window. This skill's `sonnet-subagent` / `haiku-subagent` runners use the in-session subagent path (cheaper, faster, no setup). For *true-instance* fan-out (rare, but real), Agent Teams is the supported route. Don't reach for it for normal fan-out — subagents cover 95% of the need.
+**Agent Teams (experimental, shipped Feb 2026).** For multi-session orchestration beyond same-process subagents, Anthropic ships **Agent Teams**: a lead agent coordinating independent teammate *instances* via shared task lists and mailbox-style inter-agent messaging. Enable with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`.
+
+**Default behaviour: stay on subagents.** This skill's `sonnet-subagent` / `haiku-subagent` runners cover 95% of fan-out needs — cheaper, ~5-10× faster to spawn, well-understood failure modes, no shared-mailbox footgun. Agent Teams is a *real* escape hatch, not a parallel-by-default mechanism. The bar for reaching for it is genuinely high.
+
+**Reach for Agent Teams ONLY when one of these holds:**
+
+| Trigger | Why subagents fail here |
+|---------|------------------------|
+| A single chunk needs >200k context (loading large codebases, big PDFs, multi-file deep analysis) | Subagent context is bounded; a full Claude Code session has the 1M window |
+| A chunk needs project-scoped MCP servers the orchestrator's session doesn't have | Subagents inherit orchestrator MCP config; can't add chunk-specific servers |
+| A chunk needs different hooks (different security policy, different auto-format, different permission scope) | Subagents share hooks with the orchestrator |
+| The chunk run is long enough that it could outlast the orchestrator's session limit | Subagents die when the orchestrator session dies |
+| Sir explicitly says "use Agent Teams for this" | Direct instruction overrides default |
+
+**State the call out loud when reaching for it.** Like all delegation calls, name the trigger:
+
+> `Agent Teams call: chunk-2 needs to ingest a 400k-token monorepo dump — beyond subagent context. Spinning up a teammate instance.`
+
+**Mailbox messaging is a footgun for this skill's contract.** Agent Teams supports inter-team mailbox messaging — chunks can talk to each other. This skill's manifest contract is explicit: chunks are *independent* (no shared files, no cross-dependencies). If chunks need to coordinate, the decomposition is wrong — re-author the manifest, don't paper over it with mailbox traffic. Use the mailbox only for chunk-to-orchestrator status, never chunk-to-chunk.
+
+**No runner integration yet.** Agent Teams is documented but NOT wired into `delegate.sh` as a `runner:` enum value. When a real use case lands (one of the triggers above), the integration work is: (a) add `agent-team` to the runner enum in `references/manifest-schema.md`, (b) add a spawn block to Step 6 alongside the Sonnet/Haiku/Codex examples, (c) decide how `validate`/`audit`/`apply` handle teammate-produced workspaces. Don't speculate-build it before there's a real chunk that needs it — speculative integration rots until first use exposes the wrong assumptions.
 
 **Summoning a terminal CLI subprocess.** Possible via Bash (`claude -p "<prompt>" --model sonnet`), but rarely worth it. Trade-off:
 
