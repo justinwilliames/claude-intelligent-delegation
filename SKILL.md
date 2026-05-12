@@ -1,6 +1,6 @@
 ---
 name: intelligent-delegation
-description: PRIORITISE at the START of EVERY non-trivial task — BEFORE reading files, spawning Explore subagents, or implementing anything. Run the 4-question upfront triage (scope / context / fresh-window / parallelism). If any answer is yes, delegate. Saves main-session tokens and keeps orchestrator reasoning sharp. Orchestrate complex builds by decomposing tasks, fanning out to Sonnet sub-sessions and Codex in parallel, then collecting, QA-ing, and presenting a unified diff. Always fires when the user says 'delegate', 'fan out', 'parallel build', 'decompose this task', 'hand off to codex', or presents a multi-part build request. Reactive fallbacks (in case upfront triage was skipped): 3+ files already read this turn, request mentions 2+ independent files/features/deliverables, or 2+ Explore subagents have already fired. Skip ONLY for conversational replies, status questions, single-line edits, or lookups under 3 file reads.
+description: PRIORITISE at the START of EVERY non-trivial task — BEFORE reading files, spawning Explore subagents, or implementing anything. Run the 5-question upfront triage (scope / context / fresh-window / parallelism / model-fit). If any of the first four are yes, delegate. If all four are no but the task does not require Opus-level reasoning, still delegate — as a 1-chunk Sonnet or Codex run for efficiency. Only stay in-session when all four are no AND Opus reasoning is genuinely required. Saves main-session tokens, keeps orchestrator reasoning sharp, and stops burning Opus on work Sonnet/Codex would do better and cheaper. Orchestrate complex builds by decomposing tasks, fanning out to Sonnet sub-sessions and Codex in parallel, then collecting, QA-ing, and presenting a unified diff. Always fires when the user says 'delegate', 'fan out', 'parallel build', 'decompose this task', 'hand off to codex', or presents a multi-part build request. Reactive fallbacks (in case upfront triage was skipped): 3+ files already read this turn, request mentions 2+ independent files/features/deliverables, or 2+ Explore subagents have already fired. Skip ONLY for conversational replies, status questions, single-line edits, or lookups under 3 file reads.
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit, Agent, TaskOutput
 ---
 
@@ -16,22 +16,27 @@ You are the **orchestrator**. Your job: decompose, delegate, collect, verify, pr
 
 **The single most important behaviour in this skill.** When any non-trivial task arrives — before reading files, spawning Explore subagents, writing code, or fanning out — run this 5-second check. The point is to catch delegation candidates BEFORE the main session burns context, not after.
 
-**The four questions:**
+**The five questions:**
 
 1. **Scope** — does the task touch 2+ independent files, features, or deliverables?
 2. **Context** — would in-session execution likely burn >30% of remaining context?
 3. **Fresh-window** — would a single deep task benefit from a fresh prompt cache + clean reasoning surface? (Deep refactor in one module, adversarial review of one file, anything that would otherwise eat 40%+ of main-session context.)
 4. **Parallelism** — are there 2+ independent units that could execute concurrently?
+5. **Model fit** — *only ask this if 1–4 are all no.* Does the task genuinely need Opus-level reasoning (multi-file design, architectural tradeoffs, ambiguous spec, nuanced review)? If not, delegate it to a single Sonnet or Codex sub-agent for efficiency.
 
 **The decision rule:**
 
-- **ANY answer yes** → start the delegate flow. `/delegate plan "<task>"` for non-obvious decompositions, `/delegate run "<task>"` once you have the manifest. For a single deep task, a 1-chunk delegate run to Sonnet or Codex still wins on fresh context — parallelism is an optimisation, fresh-context is the primary value.
-- **ALL no** → proceed in-session, but log the call in one line so Sir can override.
+- **ANY of 1–4 yes** → start the delegate flow. `/delegate plan "<task>"` for non-obvious decompositions, `/delegate run "<task>"` once you have the manifest. For a single deep task, a 1-chunk delegate run to Sonnet or Codex still wins on fresh context — parallelism is an optimisation, fresh-context is the primary value.
+- **1–4 all no, but Opus reasoning NOT required** → still delegate, but as an *efficiency* 1-chunk run, not a parallelism run. Route to Sonnet sub-agent (mechanical edits, boilerplate, clear-pattern work, simple refactors, generation from a tight spec) or Codex (single-file adversarial review, narrow precision fix). The orchestrator (Opus) writes the brief, delegates, reviews the returned diff. Do NOT burn Opus on work that Sonnet or Codex would do better and cheaper.
+- **1–4 all no AND Opus reasoning required** → proceed in-session. Log the call in one line so Sir can override.
+
+**What "Opus reasoning required" actually means.** Use Opus in-session for: multi-file design decisions, architectural tradeoffs, synthesising disparate context the sub-agent doesn't have, debugging where the failure mode is ambiguous, reviewing or reconciling work the sub-agents produced, talking to Sir. Do NOT use Opus in-session for: mechanical edits following a clear pattern, boilerplate generation, writing a test from a clear spec, single-file refactors with obvious shape, formatting/lint fixes, dependency bumps. Those go to Sonnet.
 
 **Always state the call out loud, one line:**
 
-> `Delegation triage: in-session — single-file edit, no fan-out value.`
-> `Delegation triage: delegating — 4 independent feature chunks, would burn ~50% main-session context.`
+> `Delegation triage: in-session on Opus — multi-file architectural decision, reasoning needed here.`
+> `Delegation triage: 1-chunk Sonnet run — mechanical refactor, no Opus reasoning required, efficiency play.`
+> `Delegation triage: fan-out — 4 independent feature chunks, would burn ~50% main-session context.`
 > `Delegation triage: 1-chunk Codex run — deep algorithm, want fresh-window + adversarial review.`
 
 This makes the orchestration call visible without bloating the response. Sir gets to redirect early instead of after you've already started reading files.
@@ -128,11 +133,11 @@ next step: /delegate resume <run-id>
 
 ## Context Budget Rules
 
-- **<30% context**: do the work in-session. Delegation overhead not worth it.
-- **30–60%**: hand exploration to Explore subagents. Keep implementation local.
+- **<30% context**: do the work in-session *only if it needs Opus reasoning*. Mechanical or pattern-following work goes to a 1-chunk Sonnet sub-agent regardless of context budget — Opus shouldn't be spent on it.
+- **30–60%**: hand exploration to Explore subagents. Keep implementation local only when it requires orchestrator-level synthesis.
 - **>60%** OR **2+ independent units**: decompose and fan out. The sweet spot.
 - **Cache discipline**: prompt cache TTL is 5 min. Stay <270s between turns or commit to ≥1200s. Sub-sessions start with fresh cache.
-- **Single-chunk delegation is valid.** A 1-chunk run to Sonnet or Codex is worth it when you want a *fresh context window* for one large task — not just for parallelism. Use this for: a deep refactor in one module (Sonnet, fresh cache), an adversarial review of one file (Codex, `--effort high`), or any task that would burn 40%+ of main-session context if done in-place. Parallelism is an optimisation; fresh-context is the primary value of delegation.
+- **Single-chunk delegation is valid.** A 1-chunk run to Sonnet or Codex is worth it for any of three reasons: (a) **fresh context window** — a deep task that would burn 40%+ of main-session context; (b) **model fit / efficiency** — mechanical or pattern-following work that doesn't need Opus, route to Sonnet; (c) **independent perspective** — adversarial review or precision fix, route to Codex with `--effort high`. Parallelism is one optimisation, but not the only one. Fresh-context, efficiency, and perspective are all valid reasons to delegate a single chunk.
 
 ## When to Use Codex vs Sonnet Subagent
 
@@ -142,6 +147,17 @@ next step: /delegate resume <run-id>
 | Want a different model's opinion | Follows project conventions |
 | Adversarial review | Parallelisable with siblings |
 | Deep algorithmic work | Output is a clean diff |
+| — | **Efficiency 1-chunk run** — mechanical work that doesn't need Opus |
+
+**The efficiency 1-chunk Sonnet pattern.** When triage Q1–4 all land "no" but the task is mechanical / pattern-following / boilerplate, the default move is a 1-chunk Sonnet sub-agent run — not in-session Opus. Examples that should go here:
+- Rename a symbol across 3 files following an obvious pattern
+- Generate a test file from a clear spec
+- Apply a lint/format fix you've already diagnosed
+- Bump a dependency and update the call sites
+- Write a CRUD endpoint that mirrors an existing one
+- Update copy/strings across a known set of files
+
+In-session Opus stays the right call for: multi-file design, architectural tradeoffs, ambiguous-spec debugging, reconciling reviewer findings, talking to Sir.
 
 ## Usage
 
@@ -456,3 +472,4 @@ Set `DELEGATE_DEBUG=1` to enable an ERR trap that prints the failing line + comm
 - Do NOT let chunks write directly into the project path. Workspaces only.
 - Do NOT skip Step 10.5 (dual-model QA review) when a run trips any "major" trigger — chunks ≥3, files ≥5, risk surface, ≥300 LOC, or user-flagged. Mechanical QA passing is necessary, not sufficient.
 - Do NOT auto-apply fixes from the reconciled review punch list. Surface, get approval, then fix.
+- Do NOT burn Opus on mechanical work just because fan-out has no value. If triage Q1–4 are all no, ask Q5 (model fit) before defaulting to in-session execution. Rename-across-files, boilerplate, pattern-mirroring, dependency bumps — all 1-chunk Sonnet. Opus stays for design, tradeoffs, synthesis, and orchestration.

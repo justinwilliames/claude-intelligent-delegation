@@ -41,18 +41,21 @@ Long main sessions degrade reasoning quality and burn prompt cache. This skill k
 
 ## Upfront triage — the load-bearing behaviour
 
-The skill is designed to fire **at the start of every non-trivial task**, before the main session reads files or spawns Explore subagents. Claude runs a 5-second, 4-question check:
+The skill is designed to fire **at the start of every non-trivial task**, before the main session reads files or spawns Explore subagents. Claude runs a 5-second, 5-question check:
 
 1. **Scope** — does this touch 2+ independent files/features/deliverables?
 2. **Context** — would in-session execution burn >30% of remaining context?
 3. **Fresh-window** — would a single deep task benefit from a fresh prompt cache + clean reasoning surface?
 4. **Parallelism** — are there 2+ independent units that could run concurrently?
+5. **Model fit** (only if 1–4 are all no) — does the task genuinely need Opus reasoning? If not, route to a 1-chunk Sonnet or Codex run for efficiency.
 
-If any answer is yes, delegate. Even a 1-chunk delegate run is worth it for fresh-window value alone — parallelism is the optimisation, fresh context is the primary win.
+If any of 1–4 is yes, delegate. Even a 1-chunk run is worth it for fresh-window value alone — parallelism is one optimisation; fresh-context and model-fit are equally valid reasons to delegate. The Q5 check stops the main session burning Opus on mechanical work (renames, boilerplate, pattern-mirroring, lint/format fixes) that Sonnet handles better and cheaper.
 
 Claude states the call in a single line so you can redirect early:
 
-> `Delegation triage: delegating — 4 independent feature chunks, would burn ~50% main-session context.`
+> `Delegation triage: fan-out — 4 independent feature chunks, would burn ~50% main-session context.`
+> `Delegation triage: 1-chunk Sonnet run — mechanical rename across 3 files, no Opus reasoning required.`
+> `Delegation triage: in-session on Opus — multi-file architectural decision, reasoning needed here.`
 
 Skip the triage for conversational replies, status questions, single-line edits, or lookups under 3 file reads.
 

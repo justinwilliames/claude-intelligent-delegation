@@ -20,7 +20,8 @@ This document explains how the orchestrator should decide between keeping work i
 3. If delegation is justified, split by file ownership boundaries first.
 4. Pick Sonnet when the chunk should produce a conventional repo diff.
 5. Pick Codex when you want an independent model perspective or a narrow precision task.
-6. Keep integration, conflict decisions, QA, and user communication in the main Opus session.
+6. **Before defaulting to "in-session on Opus", check model fit.** Mechanical / pattern-following / boilerplate work routes to a 1-chunk Sonnet sub-agent even if context is healthy and there is no fan-out value. Opus is reserved for design, tradeoffs, synthesis, orchestration, and user communication.
+7. Keep integration, conflict decisions, QA, and user communication in the main Opus session.
 
 ## Context Budget Thresholds
 
@@ -115,15 +116,32 @@ Use this table after you have already decided that a chunk should not stay in th
 
 ## Single-chunk delegation
 
-A 1-chunk delegation to Sonnet or Codex is a valid pattern when the goal is a *fresh context window* — not parallelism. Parallelism is an optimisation; fresh-context is the primary value of delegation.
+A 1-chunk delegation to Sonnet or Codex is a valid pattern for three distinct reasons. Parallelism is one optimisation, but not the only one.
+
+| Reason | Runner | Trigger |
+|--------|--------|---------|
+| **Fresh context window** | Sonnet (or Codex for deep algorithm) | Task would burn 40%+ of main-session context, force 5+ file reads, or hold a 500+ line working set |
+| **Model fit / efficiency** | Sonnet | Task is mechanical / pattern-following / boilerplate — does not need Opus reasoning |
+| **Independent perspective** | Codex, `--effort high` | Adversarial review, narrow precision fix, skeptical second opinion on a plan |
 
 Use single-chunk delegation when:
 
-- **Deep refactor in one module** (Sonnet) — when the work would burn 40%+ of main-session context, a fresh Sonnet subagent gives clean cache and reasoning space.
-- **Adversarial review of one file or plan** (Codex, `--effort high`) — different model family, skeptical perspective, narrow scope. This is the `/delegate review` use case.
-- **Any single task >40% of remaining main-session budget** — the overhead of fan-out is justified by the context relief, even with no sibling chunks.
+- **Deep refactor in one module** (Sonnet) — fresh-context play. Clean cache and reasoning space.
+- **Mechanical multi-file work** (Sonnet) — efficiency play. Rename a symbol across 3 files, mirror an existing endpoint, apply a lint fix, bump a dependency and patch call sites, generate a test from a clear spec, update copy across known files. Opus reasoning is not what makes this work succeed; Sonnet is faster and cheaper.
+- **Adversarial review of one file or plan** (Codex, `--effort high`) — perspective play. This is the `/delegate review` use case.
+- **Any single task >40% of remaining main-session budget** — fresh-context play, even with no sibling chunks.
 
-Decision rule: if the task would force the main session to read 5+ files or hold a 500+ line working set, delegate it — even as a single chunk.
+### When NOT to delegate a single chunk
+
+Keep in-session on Opus when the task needs orchestrator-level reasoning:
+
+- Multi-file design decisions or architectural tradeoffs.
+- Synthesising context the sub-agent doesn't have.
+- Debugging where the failure mode is ambiguous.
+- Reviewing or reconciling sub-agent output.
+- Talking to the user, asking for clarification, surfacing risks.
+
+The rule: ask "would Sonnet, given the same brief, produce the same or better result than Opus would?" If yes, delegate. If no, stay in-session.
 
 ## Anti-Patterns
 
@@ -187,6 +205,23 @@ Recommended execution:
 - Read the two files.
 - Patch them in the main session.
 - Run the targeted test command.
+
+### Example 1b: Mechanical multi-file rename (efficiency 1-chunk Sonnet)
+
+Task:
+- Rename `getUser` to `fetchUser` across the codebase (8 call sites in 5 files), update tests.
+
+Routing decision:
+- **1-chunk Sonnet sub-agent.** Not in-session on Opus.
+
+Why:
+- Context is healthy (<30%), so the old rule said "do it in session" — but the work is purely mechanical pattern-matching. Opus reasoning adds nothing here.
+- A fresh Sonnet sub-agent with a tight brief executes faster, cheaper, and leaves the orchestrator's cache warm for the next decision.
+
+Recommended execution:
+- Orchestrator writes a short brief: project path, the rename, the test command.
+- Single-chunk delegate run, `runner: sonnet-subagent`.
+- Review the returned diff in the main session, apply, run QA.
 
 ### Example 2: Medium three-chunk feature
 
