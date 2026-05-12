@@ -1,6 +1,6 @@
 ---
 name: intelligent-delegation
-description: PRIORITISE at the START of EVERY non-trivial task — BEFORE reading files, spawning Explore subagents, or implementing anything. Run the 5-question upfront triage (scope / context / fresh-window / parallelism / model-fit). If any of the first four are yes, delegate. If all four are no but the task does not require Opus-level reasoning, still delegate — as a 1-chunk Sonnet or Codex run for efficiency. Only stay in-session when all four are no AND Opus reasoning is genuinely required. Saves main-session tokens, keeps orchestrator reasoning sharp, and stops burning Opus on work Sonnet/Codex would do better and cheaper. Orchestrate complex builds by decomposing tasks, fanning out to Sonnet sub-sessions and Codex in parallel, then collecting, QA-ing, and presenting a unified diff. Always fires when the user says 'delegate', 'fan out', 'parallel build', 'decompose this task', 'hand off to codex', or presents a multi-part build request. Reactive fallbacks (in case upfront triage was skipped): 3+ files already read this turn, request mentions 2+ independent files/features/deliverables, or 2+ Explore subagents have already fired. Skip ONLY for conversational replies, status questions, single-line edits, or lookups under 3 file reads.
+description: PRIORITISE at the START of EVERY new session, EVERY non-trivial task, AND EVERY follow-up turn that adds scope, pivots topic, or reveals unexpected complexity — BEFORE reading files, spawning Explore subagents, or implementing anything. Run the 5-question triage (scope / context / fresh-window / parallelism / model-fit). If any of the first four are yes, delegate. If all four are no but the task does not require Opus-level reasoning, still delegate — as a 1-chunk Sonnet, Haiku, or Codex run for efficiency. Only stay in-session when all four are no AND Opus reasoning is genuinely required. Default aggressive — when in doubt, re-triage. The cost is 5 seconds; the cost of missing it is burning Opus on work that should have fanned out. Saves main-session tokens, keeps orchestrator reasoning sharp, and stops burning Opus on work Sonnet/Haiku/Codex would do better and cheaper. Orchestrate complex builds by decomposing tasks, fanning out to Sonnet/Haiku sub-sessions and Codex in parallel, then collecting, QA-ing, and presenting a unified diff. Always fires when the user says 'delegate', 'fan out', 'parallel build', 'decompose this task', 'hand off to codex', or presents a multi-part build request. Mandatory re-triage on: follow-up turns that add scope ('also do X', 'and now Y', 'next, can you...'), topic pivots, replicated-work requests ('apply the same to Y'), session-handoff resumptions, post-compaction turns, and any moment you catch yourself thinking 'this is bigger than I thought'. Reactive fallbacks: 2+ files already read this turn, request mentions 2+ independent files/features/deliverables, 1+ Explore subagent already fired with another being considered, or you're about to read a 3rd file. Skip ONLY for: genuinely conversational replies, status questions answerable from memory/git/a single tool call, truly single-line single-symbol edits, or one-file one-read lookups.
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit, Agent, TaskOutput
 ---
 
@@ -41,13 +41,40 @@ You are the **orchestrator**. Your job: decompose, delegate, collect, verify, pr
 
 This makes the orchestration call visible without bloating the response. Sir gets to redirect early instead of after you've already started reading files.
 
-**Skip the triage entirely** for:
-- Conversational replies ("what's the status of X?", "explain Y").
-- Single-line / single-symbol edits.
-- Lookups expected to resolve in <3 file reads.
-- Status questions answerable from memory / git / a single tool call.
+**Skip the triage entirely** ONLY for these narrowly-defined cases:
+- Genuinely conversational replies ("what's the status of X?", "explain Y") — no implementation surface at all.
+- Truly single-line / single-symbol edits — one line, one symbol, no analysis, no surrounding context to load.
+- One-file, one-read lookups — single file, single Read tool call, done. (Note: this is *tighter* than the old "<3 file reads" threshold — that was too loose and let too much accidental scope creep in.)
+- Status questions answerable from memory, git, or a single tool call.
+
+**If you're not sure whether the task qualifies for skip, run the triage anyway.** 5 seconds beats 30% of a context window. The default bias is *toward* triaging, not away from it.
 
 **Anti-pattern:** running the triage, deciding "delegate", then reading 5 files first "to understand the codebase". The whole point of delegating is to push that exploration into sub-sessions. If the triage says delegate, the next move is `/delegate plan` — full stop.
+
+## Re-triage triggers — fire the 5 questions AGAIN mid-session
+
+**The upfront triage is not a one-shot at session start.** It re-fires whenever the work surface changes. Default aggressive: when in doubt, re-triage. The cost is 5 seconds; the cost of missing it is burning Opus on work that should have fanned out, or accumulating scope inside a session that should have been handed off.
+
+**Mandatory re-triage moments:**
+
+| Trigger | Why it fires | What to do |
+|---------|--------------|------------|
+| Follow-up turn adds scope ("also do X", "and now Y", "next, can you...") | The new ask is a fresh task — in-session momentum is not an excuse to skip the call | Re-run the 5 questions on the *new* request, ignoring prior in-session decisions |
+| User pivots to a new topic | New topic ≠ continuation of prior work | Fresh triage from scratch |
+| Replicated work request ("apply the same to Y", "do this for X too") | Replication IS parallelism by definition — Q4 just answered itself | Default to fan-out unless the unit count is genuinely 1 |
+| Tool result reveals 2+ files of unexpected work | The complexity surface just expanded | Re-evaluate parallelism + context budget |
+| Context just compressed / auto-summary fired | Fresh window = fresh delegation surface | Reassess everything pending; favour handoff if context is mid-task |
+| About to read a 3rd file in one turn | The reactive fallback threshold — exploration is becoming a context drain | Stop reading. Re-triage. If "delegate", hand exploration to an Explore subagent |
+| First non-trivial request after a session handoff | Resumed-state ≠ in-session continuation; the new session has full context budget to spend | Re-run triage on the resumed task before doing anything else |
+| You catch yourself thinking "this is bigger than I thought" | The signal | Stop. Re-triage |
+| User says "while you're at it" / "one more thing" | These are always scope additions | Triage the addition independently |
+| Failed in-session attempt, about to retry differently | Failure means the original approach was wrong; the new approach gets fresh triage | Don't just retry — re-triage first |
+
+**New-session protocol.** The first non-trivial user request in any new session = mandatory triage. State it explicitly out loud. "I haven't triaged yet" is never an excuse — fresh-session is exactly when delegation has the most leverage (full context budget, no momentum to protect, clean cache). The aggression goes UP at session start, not down.
+
+**Follow-up turn protocol.** Every follow-up turn — not just the first request — gets a one-line internal check: "did the scope change? did the surface expand? did the user add work?" If yes to any, re-run the 5 questions. If no, proceed without ceremony. The check itself is sub-second; it is not optional.
+
+**Why this matters.** The most common delegation failure mode is not "ran triage and got it wrong" — it's "didn't re-run triage when the work grew." A session that started as a single-file edit and accumulated five follow-up additions ends up doing fan-out-shaped work inside one context window, badly. Re-triage cuts that off at every checkpoint.
 
 ## Model Routing — the tier table
 
