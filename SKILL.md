@@ -53,27 +53,32 @@ This makes the orchestration call visible without bloating the response. Sir get
 
 | Tier | Model | Session | Use for |
 |------|-------|---------|---------|
-| **Orchestrator** | Opus (main session) | Stays | Decompose, review diffs, QA, reconcile dual-model reviews, talk to the user |
-| **QA reviewer A** | Opus (fresh subagent) | Subagent | Cold semantic review of an applied major run (Step 10.5) |
+| **Orchestrator** | Opus 4.7 (main session, adaptive `xhigh` thinking) | Stays | Decompose, review diffs, QA, reconcile dual-model reviews, talk to the user |
+| **QA reviewer A** | Opus 4.7 (fresh subagent) | Subagent | Cold semantic review of an applied major run (Step 10.5) |
 | **QA reviewer B** | Codex GPT-5.5 `--effort high` | Background | Adversarial review of an applied major run, parallel to reviewer A (Step 10.5) |
-| **Planning** | Opus (Plan subagent) | Subagent | Architecture, multi-file refactor design |
-| **Build** | Sonnet (Agent) | Fresh per chunk | Parallel independent implementation chunks |
+| **Planning** | Opus 4.7 (Plan subagent) | Subagent | Architecture, multi-file refactor design |
+| **Build** | Sonnet 4.6 (Agent, adaptive thinking) | Fresh per chunk | Parallel independent implementation chunks (multi-file, project-conventions-aware) |
 | **Precision** | Codex GPT-5.5 | Background | Adversarial review, deep algorithms, second opinions |
-| **Lookup** | Haiku (Explore subagent) | Subagent | File location, grep-for-symbol, quick searches |
-| **Integration** | Opus (main session, in-line) | Stays | runner: `main` chunks — cross-cutting edits, package.json, config wiring, glue between sibling chunks |
+| **Cheap parallel** | Haiku 4.5 (Agent, `model="haiku"`) | Fresh per task | High-volume narrow tasks at scale: classify/tag, format-convert, bulk mechanical text edits, smoke checks, per-row enrichment |
+| **Lookup** | Haiku 4.5 (Explore subagent) | Subagent | File location, grep-for-symbol, quick searches |
+| **Integration** | Opus 4.7 (main session, in-line) | Stays | runner: `main` chunks — cross-cutting edits, package.json, config wiring, glue between sibling chunks |
 
-Use `runner: main` sparingly — typically the final chunk in a chain when integration genuinely requires orchestrator context (sibling-chunk awareness, cross-file decisions). Most chunks should be `sonnet-subagent`.
+**Pricing context (May 2026):** Opus 4.7 $5/$25 per MTok • Sonnet 4.6 $3/$15 • Haiku 4.5 $1/$5 • Codex GPT-5.5 separate billing. Haiku is ~5× cheaper than Sonnet on input — for narrow parallel tasks, the savings compound across chunks. Don't be precious about it; route mechanically suitable work to Haiku without ceremony.
+
+Use `runner: main` sparingly — typically the final chunk in a chain when integration genuinely requires orchestrator context (sibling-chunk awareness, cross-file decisions). Most chunks should be `sonnet-subagent` for code work or `haiku-subagent` for narrow text/data work.
 
 ## Effort Levels per Runner
 
 | Runner | Effort control | Default | Override |
 |--------|---------------|---------|----------|
-| **Orchestrator (Opus)** | Model tier — always Opus 4.7 | Full | Stay on Opus; never switch to Sonnet manually |
-| **Sonnet subagents** | Model tier — always `model="sonnet"` | Full Sonnet | No per-call knob; model IS the effort |
-| **Codex** | `CODEX_EFFORT` env var → `model_reasoning_effort` | `medium` | `CODEX_EFFORT=high` for deep algorithmic work |
-| **Haiku (Explore)** | Model tier — always `model="haiku"` | Full Haiku | No knob |
+| **Orchestrator (Opus 4.7)** | Adaptive thinking (`xhigh` default in Claude Code) | Full + adaptive | Stay on Opus; never switch to Sonnet manually. Adaptive thinking dynamically deepens reasoning on hard subproblems |
+| **Sonnet subagents (4.6)** | Model tier + adaptive thinking | Adaptive (default) | Set `thinking="extended"` for genuinely deliberative tasks (math, multi-step symbolic reasoning); default OFF for code chunks — extended thinking can hurt by ~36% on intuitive tasks |
+| **Codex** | `CODEX_EFFORT` env var → `model_reasoning_effort` | `medium` | `CODEX_EFFORT=high` for deep algorithmic work or adversarial review |
+| **Haiku 4.5 (Cheap parallel + Explore)** | Model tier + optional extended thinking | OFF | Default OFF for pure lookups/classification/bulk edits. Enable extended thinking only for unambiguous deliberative subtasks — rare for Haiku-suitable work |
 
-**Session advice:** Start and stay on Opus 4.7. The skill routes sub-runners automatically. Switching to Sonnet manually to "save tokens" just degrades the orchestrator — the planning and QA gates are where Opus earns its keep.
+**Session advice:** Start and stay on Opus 4.7. The skill routes sub-runners automatically. Switching to Sonnet manually to "save tokens" just degrades the orchestrator — the planning and QA gates are where Opus earns its keep. Adaptive thinking on Opus is the new default — don't fight it; it spends thought where the task warrants it.
+
+**Thinking-mode rule of thumb:** If the task is "follow the obvious pattern", leave thinking OFF on Sonnet/Haiku. If the task is "reason about which of three valid approaches is right here", extended thinking earns its cost. The 36% intuitive-task regression is real — don't reflexively turn it on.
 
 ## Session Handoff — when to suggest a fresh start
 
@@ -136,7 +141,7 @@ next step: /delegate resume <run-id>
 - **<30% context**: do the work in-session *only if it needs Opus reasoning*. Mechanical or pattern-following work goes to a 1-chunk Sonnet sub-agent regardless of context budget — Opus shouldn't be spent on it.
 - **30–60%**: hand exploration to Explore subagents. Keep implementation local only when it requires orchestrator-level synthesis.
 - **>60%** OR **2+ independent units**: decompose and fan out. The sweet spot.
-- **Cache discipline**: prompt cache TTL is 5 min. Stay <270s between turns or commit to ≥1200s. Sub-sessions start with fresh cache.
+- **Cache discipline**: prompt cache TTL is 5 min default; paid 1-hour cache available at extra cost. Stay <270s between turns or commit to ≥1200s. Sub-sessions start with fresh cache. **Subagent progress summaries now hit the prompt cache (May 2026)** — repeated fan-outs with a shared system prompt and shared context blocks cache cleanly across siblings, cutting `cache_creation` cost ~3×. When fanning out many chunks, structure the chunk prompts with a stable prefix (shared briefing, project conventions) so the cache hit rate compounds.
 - **Single-chunk delegation is valid.** A 1-chunk run to Sonnet or Codex is worth it for any of three reasons: (a) **fresh context window** — a deep task that would burn 40%+ of main-session context; (b) **model fit / efficiency** — mechanical or pattern-following work that doesn't need Opus, route to Sonnet; (c) **independent perspective** — adversarial review or precision fix, route to Codex with `--effort high`. Parallelism is one optimisation, but not the only one. Fresh-context, efficiency, and perspective are all valid reasons to delegate a single chunk.
 
 ## When to Use Codex vs Sonnet Subagent
@@ -147,7 +152,7 @@ next step: /delegate resume <run-id>
 | Want a different model's opinion | Follows project conventions |
 | Adversarial review | Parallelisable with siblings |
 | Deep algorithmic work | Output is a clean diff |
-| — | **Efficiency 1-chunk run** — mechanical work that doesn't need Opus |
+| — | **Efficiency 1-chunk run** — mechanical code work that doesn't need Opus |
 
 **The efficiency 1-chunk Sonnet pattern.** When triage Q1–4 all land "no" but the task is mechanical / pattern-following / boilerplate, the default move is a 1-chunk Sonnet sub-agent run — not in-session Opus. Examples that should go here:
 - Rename a symbol across 3 files following an obvious pattern
@@ -158,6 +163,28 @@ next step: /delegate resume <run-id>
 - Update copy/strings across a known set of files
 
 In-session Opus stays the right call for: multi-file design, architectural tradeoffs, ambiguous-spec debugging, reconciling reviewer findings, talking to Sir.
+
+## When to Use Haiku vs Sonnet (the cheap-parallel tier)
+
+Haiku 4.5 is ~5× cheaper than Sonnet on input and faster end-to-end. For tasks where the verification surface is trivial — "does the output match the spec, yes/no" — Haiku is the right routing call, both as Explore subagents (lookups) and as fresh Agent subagents for narrow-scope build chunks. Route mechanically suitable work to Haiku without ceremony; the savings compound across high-volume fan-outs.
+
+| Use Haiku | Use Sonnet |
+|-----------|------------|
+| Classify or tag a list of items | Multi-file code chunk |
+| Format conversion (JSON↔YAML, table↔CSV, MJML↔HTML stubs) | Anything requiring project-conventions awareness |
+| Bulk text edits following an unambiguous rule | Chunks that need caller/callee context |
+| Smoke checks (does X import, has Y key, schema validation) | Code that mirrors a non-trivial existing pattern |
+| File-location lookups / grep-for-symbol | Test generation from a real spec |
+| Per-row enrichment over a large list | Refactors with subtle invariants |
+| Doc lookups in known files | Anything where "looks right" might subtly be wrong |
+| Tag/categorise content blocks, audit logs, change lists | Generating glue code that wires multiple systems |
+| Strip emojis / normalise whitespace across many files | API surface design |
+
+**The rule:** Haiku for narrow, unambiguous, mechanical text/data tasks where verification is trivial. Sonnet for code chunks that need full project-conventions awareness. Opus for orchestration and design.
+
+**Fan-out pattern for high-volume Haiku work.** When you have N independent narrow tasks (e.g. 50 content blocks to classify, 30 files to lint-fix, 100 records to enrich), fan out as Haiku subagents in batches of 4–8 in parallel. Shared system prompt = good cache hit rate. Per-chunk verification = trivial schema check. The orchestrator (Opus) collates the structured outputs.
+
+**Anti-pattern:** routing code-chunk work to Haiku to save money. The Sonnet→Haiku cost savings are real but Haiku will silently miss subtleties — wrong null-handling, wrong import order, wrong test framework — that Sonnet catches. False economy. The Haiku tier earns its keep on tasks where the verification surface is *trivial* (schema check, string equality, lint pass), not "looks like working code".
 
 ## Usage
 
@@ -299,6 +326,25 @@ Create exactly these files inside WORKSPACE:
 
 When done, run: cd WORKSPACE && <verification command using ABSOLUTE imports>
 Report: file list + test summary in your final message.
+"""
+)
+```
+
+**Haiku subagent chunks** — same Agent shape as Sonnet but `model="haiku"`. Use only for narrow text/data work (see "When to Use Haiku vs Sonnet"):
+```
+Agent(
+  subagent_type="general-purpose",
+  model="haiku",
+  run_in_background=True,
+  prompt="""
+You are chunk-3 of a delegated build (Haiku tier — narrow scope, trivial verification).
+
+PROJECT (read-only context): /Users/.../my-project
+WORKSPACE (write here): /tmp/delegate/<run-id>/chunk-3/workspace
+
+Task: classify each block in INPUT.json as one of {transactional, marketing, system}.
+Output: a single classifications.json file with shape [{id, category, confidence}].
+Verification: jq '.[] | select(.category | IN("transactional","marketing","system") | not)' classifications.json must return empty.
 """
 )
 ```
@@ -462,6 +508,25 @@ If scripts break, edit them directly — you have authorization to modify anythi
 
 Set `DELEGATE_DEBUG=1` to enable an ERR trap that prints the failing line + command + exit code.
 
+## Surface notes — Desktop, CLI, and Agent Teams
+
+**Desktop ↔ CLI parity (confirmed May 2026).** Claude Code Desktop (Mac/Windows app) and the terminal CLI both support: the Agent / `subagent_type` tool, `~/.claude/skills/`, hooks, MCP servers, CLAUDE.md inheritance. This skill works identically on both surfaces — same triage, same fan-out, same QA gates. Documented Desktop gaps that affect this skill: no `--model` / `--permission-mode` flags exposed at launch, no autonomous `/loop` runs. None of those block the skill's core flow.
+
+**Agent Teams (experimental, shipped Feb 2026).** For multi-session orchestration beyond same-process subagents, Anthropic ships **Agent Teams**: a lead agent coordinating independent teammate *instances* via shared task lists and mailbox-style inter-agent messaging. Enable with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Use case: builds large enough that each chunk wants its own full Claude Code session — separate hooks, separate MCP, full independent context budget — rather than a sub-agent context window. This skill's `sonnet-subagent` / `haiku-subagent` runners use the in-session subagent path (cheaper, faster, no setup). For *true-instance* fan-out (rare, but real), Agent Teams is the supported route. Don't reach for it for normal fan-out — subagents cover 95% of the need.
+
+**Summoning a terminal CLI subprocess.** Possible via Bash (`claude -p "<prompt>" --model sonnet`), but rarely worth it. Trade-off:
+
+| Subprocess CLI gains | Subprocess CLI costs |
+|----------------------|---------------------|
+| Full 1M-token context window per chunk | Process spawn latency (~2-4s per launch) |
+| Independent hooks / MCP / settings | No streaming back to orchestrator (must scrape stdout) |
+| True session isolation | No `task-notification` token telemetry; harder to capture |
+| Survives orchestrator session limits | Permission prompts unless `--permission-mode plan` or pre-approved |
+
+Reach for CLI subprocess only when: (a) the chunk genuinely needs a full 1M context window the subagent can't give it, (b) the chunk needs project-scoped MCP/hooks the orchestrator's session doesn't have, or (c) Agent Teams isn't enabled and you need true session isolation. For everything else, in-session subagents (Sonnet/Haiku) are the right tool. Don't subprocess-spawn out of habit — it's an escape hatch, not a default.
+
+**One more recent feature worth knowing — Outcomes (research preview).** Claude Managed Agents now supports "Outcomes" — specify a desired end state, the agent loops until achieved. Different shape from this skill's decompose-fan-out-collect flow (which is bounded and explicit). Don't fold Outcomes into the core orchestration loop — it changes the determinism contract. Worth knowing for tasks where the spec is genuinely outcome-shaped ("get all tests passing", "reduce bundle size below 200kb") rather than decomposable.
+
 ## Anti-Patterns
 
 - Do NOT delegate a chunk that touches the same file as a concurrent chunk. `validate` will refuse to run, but don't try.
@@ -473,3 +538,6 @@ Set `DELEGATE_DEBUG=1` to enable an ERR trap that prints the failing line + comm
 - Do NOT skip Step 10.5 (dual-model QA review) when a run trips any "major" trigger — chunks ≥3, files ≥5, risk surface, ≥300 LOC, or user-flagged. Mechanical QA passing is necessary, not sufficient.
 - Do NOT auto-apply fixes from the reconciled review punch list. Surface, get approval, then fix.
 - Do NOT burn Opus on mechanical work just because fan-out has no value. If triage Q1–4 are all no, ask Q5 (model fit) before defaulting to in-session execution. Rename-across-files, boilerplate, pattern-mirroring, dependency bumps — all 1-chunk Sonnet. Opus stays for design, tradeoffs, synthesis, and orchestration.
+- Do NOT route code-chunk work to Haiku to save money. Haiku silently misses subtleties (wrong null-handling, wrong imports, wrong test framework) that Sonnet catches. Haiku earns its keep on tasks where the verification surface is *trivial* — schema check, string equality, lint pass — not "looks like working code".
+- Do NOT reflexively enable extended thinking on Sonnet/Haiku. It can hurt intuitive-task performance by ~36%. Reserve for genuinely deliberative subproblems (multi-step symbolic reasoning, math, weighing 3+ valid approaches).
+- Do NOT subprocess-spawn `claude` CLI from Bash as a default fan-out path. In-session subagents cover 95% of the parallel-build need. Subprocess spawn is for full-context-window edge cases or when Agent Teams isn't available.
