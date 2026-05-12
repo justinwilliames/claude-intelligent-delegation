@@ -39,6 +39,23 @@ Long main sessions degrade reasoning quality and burn prompt cache. This skill k
 
 **No git required.** State lives in `$TMPDIR/delegate/<run-id>/` — works in any directory.
 
+## Upfront triage — the load-bearing behaviour
+
+The skill is designed to fire **at the start of every non-trivial task**, before the main session reads files or spawns Explore subagents. Claude runs a 5-second, 4-question check:
+
+1. **Scope** — does this touch 2+ independent files/features/deliverables?
+2. **Context** — would in-session execution burn >30% of remaining context?
+3. **Fresh-window** — would a single deep task benefit from a fresh prompt cache + clean reasoning surface?
+4. **Parallelism** — are there 2+ independent units that could run concurrently?
+
+If any answer is yes, delegate. Even a 1-chunk delegate run is worth it for fresh-window value alone — parallelism is the optimisation, fresh context is the primary win.
+
+Claude states the call in a single line so you can redirect early:
+
+> `Delegation triage: delegating — 4 independent feature chunks, would burn ~50% main-session context.`
+
+Skip the triage for conversational replies, status questions, single-line edits, or lookups under 3 file reads.
+
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed

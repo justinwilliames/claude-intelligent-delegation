@@ -1,6 +1,6 @@
 ---
 name: intelligent-delegation
-description: Orchestrate complex builds by decomposing tasks, fanning out to Sonnet sub-sessions and Codex in parallel, then collecting, QA-ing, and presenting a unified diff. Use when the user says 'delegate', 'fan out', 'parallel build', 'decompose this task', 'hand off to codex', or presents a large multi-part build request. Also use when 3+ files have already been read this turn, when the user request mentions 2+ independent files/features/deliverables, or when 2+ Explore subagents have already fired.
+description: PRIORITISE at the START of EVERY non-trivial task — BEFORE reading files, spawning Explore subagents, or implementing anything. Run the 4-question upfront triage (scope / context / fresh-window / parallelism). If any answer is yes, delegate. Saves main-session tokens and keeps orchestrator reasoning sharp. Orchestrate complex builds by decomposing tasks, fanning out to Sonnet sub-sessions and Codex in parallel, then collecting, QA-ing, and presenting a unified diff. Always fires when the user says 'delegate', 'fan out', 'parallel build', 'decompose this task', 'hand off to codex', or presents a multi-part build request. Reactive fallbacks (in case upfront triage was skipped): 3+ files already read this turn, request mentions 2+ independent files/features/deliverables, or 2+ Explore subagents have already fired. Skip ONLY for conversational replies, status questions, single-line edits, or lookups under 3 file reads.
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit, Agent, TaskOutput
 ---
 
@@ -11,6 +11,38 @@ allowed-tools: Bash, Read, Grep, Glob, Write, Edit, Agent, TaskOutput
 You are the **orchestrator**. Your job: decompose, delegate, collect, verify, present. You do not implement chunks yourself — that's what sub-sessions and Codex are for. You hold the context, own the QA gate, and report back.
 
 **No git required.** Project directories, plain folders, Notion exports, scratch dirs — anything works. State lives in a tmp run dir, not in branches.
+
+## Upfront Triage — run this BEFORE touching anything
+
+**The single most important behaviour in this skill.** When any non-trivial task arrives — before reading files, spawning Explore subagents, writing code, or fanning out — run this 5-second check. The point is to catch delegation candidates BEFORE the main session burns context, not after.
+
+**The four questions:**
+
+1. **Scope** — does the task touch 2+ independent files, features, or deliverables?
+2. **Context** — would in-session execution likely burn >30% of remaining context?
+3. **Fresh-window** — would a single deep task benefit from a fresh prompt cache + clean reasoning surface? (Deep refactor in one module, adversarial review of one file, anything that would otherwise eat 40%+ of main-session context.)
+4. **Parallelism** — are there 2+ independent units that could execute concurrently?
+
+**The decision rule:**
+
+- **ANY answer yes** → start the delegate flow. `/delegate plan "<task>"` for non-obvious decompositions, `/delegate run "<task>"` once you have the manifest. For a single deep task, a 1-chunk delegate run to Sonnet or Codex still wins on fresh context — parallelism is an optimisation, fresh-context is the primary value.
+- **ALL no** → proceed in-session, but log the call in one line so Sir can override.
+
+**Always state the call out loud, one line:**
+
+> `Delegation triage: in-session — single-file edit, no fan-out value.`
+> `Delegation triage: delegating — 4 independent feature chunks, would burn ~50% main-session context.`
+> `Delegation triage: 1-chunk Codex run — deep algorithm, want fresh-window + adversarial review.`
+
+This makes the orchestration call visible without bloating the response. Sir gets to redirect early instead of after you've already started reading files.
+
+**Skip the triage entirely** for:
+- Conversational replies ("what's the status of X?", "explain Y").
+- Single-line / single-symbol edits.
+- Lookups expected to resolve in <3 file reads.
+- Status questions answerable from memory / git / a single tool call.
+
+**Anti-pattern:** running the triage, deciding "delegate", then reading 5 files first "to understand the codebase". The whole point of delegating is to push that exploration into sub-sessions. If the triage says delegate, the next move is `/delegate plan` — full stop.
 
 ## Model Routing — the tier table
 
