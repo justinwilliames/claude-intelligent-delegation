@@ -1,6 +1,6 @@
 ---
 name: intelligent-delegation
-description: PRIORITISE at the START of EVERY new session, EVERY non-trivial task, AND EVERY follow-up turn that adds scope, pivots topic, or reveals unexpected complexity — BEFORE reading files, spawning Explore subagents, or implementing anything. Run the 5-question triage (scope / context / fresh-window / parallelism / model-fit). If any of the first four are yes, delegate. If all four are no but the task does not require Opus-level reasoning, still delegate — as a 1-chunk Sonnet, Haiku, or Codex run for efficiency. Only stay in-session when all four are no AND Opus reasoning is genuinely required. Default aggressive — when in doubt, re-triage. The cost is 5 seconds; the cost of missing it is burning Opus on work that should have fanned out. Saves main-session tokens, keeps orchestrator reasoning sharp, and stops burning Opus on work Sonnet/Haiku/Codex would do better and cheaper. Orchestrate complex builds by decomposing tasks, fanning out to Sonnet/Haiku sub-sessions and Codex in parallel, then collecting, QA-ing, and presenting a unified diff. Always fires when the user says 'delegate', 'fan out', 'parallel build', 'decompose this task', 'hand off to codex', or presents a multi-part build request. Mandatory re-triage on: follow-up turns that add scope ('also do X', 'and now Y', 'next, can you...'), topic pivots, replicated-work requests ('apply the same to Y'), session-handoff resumptions, post-compaction turns, and any moment you catch yourself thinking 'this is bigger than I thought'. Reactive fallbacks: 2+ files already read this turn, request mentions 2+ independent files/features/deliverables, 1+ Explore subagent already fired with another being considered, or you're about to read a 3rd file. Skip ONLY for: genuinely conversational replies, status questions answerable from memory/git/a single tool call, truly single-line single-symbol edits, or one-file one-read lookups.
+description: PRIORITISE at the START of EVERY new session, EVERY non-trivial task, AND EVERY follow-up turn that adds scope, pivots topic, or reveals unexpected complexity — BEFORE reading files, spawning Explore subagents, or implementing anything. Run the 6-question triage (scope / context / fresh-window / parallelism / large-surface-1M / model-fit). If any of the first four are yes, delegate to subagent/Codex. If Q5 is yes (read surface >150K tokens), route that chunk to a 1M-context Opus 4.7 CLI subprocess — never seat the orchestrator on 1M. If all five are no but the task does not require Opus-level reasoning, still delegate — as a 1-chunk Sonnet, Haiku, or Codex run for efficiency. Only stay in-session when 1-5 are no AND Opus reasoning is genuinely required. Default aggressive — when in doubt, re-triage. The cost is 5 seconds; the cost of missing it is burning Opus on work that should have fanned out. Saves main-session tokens, keeps orchestrator reasoning sharp, and stops burning Opus on work Sonnet/Haiku/Codex would do better and cheaper. Orchestrate complex builds by decomposing tasks, fanning out to Sonnet/Haiku sub-sessions and Codex in parallel, then collecting, QA-ing, and presenting a unified diff. Always fires when the user says 'delegate', 'fan out', 'parallel build', 'decompose this task', 'hand off to codex', or presents a multi-part build request. Mandatory re-triage on: follow-up turns that add scope ('also do X', 'and now Y', 'next, can you...'), topic pivots, replicated-work requests ('apply the same to Y'), session-handoff resumptions, post-compaction turns, and any moment you catch yourself thinking 'this is bigger than I thought'. Reactive fallbacks: 2+ files already read this turn, request mentions 2+ independent files/features/deliverables, 1+ Explore subagent already fired with another being considered, or you're about to read a 3rd file. Skip ONLY for: genuinely conversational replies, status questions answerable from memory/git/a single tool call, truly single-line single-symbol edits, or one-file one-read lookups.
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit, Agent, TaskOutput
 ---
 
@@ -16,19 +16,21 @@ You are the **orchestrator**. Your job: decompose, delegate, collect, verify, pr
 
 **The single most important behaviour in this skill.** When any non-trivial task arrives — before reading files, spawning Explore subagents, writing code, or fanning out — run this 5-second check. The point is to catch delegation candidates BEFORE the main session burns context, not after.
 
-**The five questions:**
+**The six questions:**
 
 1. **Scope** — does the task touch 2+ independent files, features, or deliverables?
 2. **Context** — would in-session execution likely burn >30% of remaining context?
 3. **Fresh-window** — would a single deep task benefit from a fresh prompt cache + clean reasoning surface? (Deep refactor in one module, adversarial review of one file, anything that would otherwise eat 40%+ of main-session context.)
 4. **Parallelism** — are there 2+ independent units that could execute concurrently?
-5. **Model fit** — *only ask this if 1–4 are all no.* Does the task genuinely need Opus-level reasoning (multi-file design, architectural tradeoffs, ambiguous spec, nuanced review)? If not, delegate it to a single Sonnet or Codex sub-agent for efficiency.
+5. **Large-surface (1M context fit)** — does the chunk's *required read surface* exceed roughly 150K tokens? Monorepo-wide review, large PDF/transcript ingest, multi-hundred-file analysis, log forensics across days. If yes, this chunk routes to a **1M-context Opus 4.7 subprocess** (`claude -p ... --model 'claude-opus-4-7[1m]'`) — not a regular Sonnet/Opus subagent. Subagent context is bounded; 1M is the right tool. See "1M Context Routing" below.
+6. **Model fit** — *only ask this if 1–5 are all no.* Does the task genuinely need Opus-level reasoning (multi-file design, architectural tradeoffs, ambiguous spec, nuanced review)? If not, delegate it to a single Sonnet or Codex sub-agent for efficiency.
 
 **The decision rule:**
 
 - **ANY of 1–4 yes** → start the delegate flow. `/delegate plan "<task>"` for non-obvious decompositions, `/delegate run "<task>"` once you have the manifest. For a single deep task, a 1-chunk delegate run to Sonnet or Codex still wins on fresh context — parallelism is an optimisation, fresh-context is the primary value.
-- **1–4 all no, but Opus reasoning NOT required** → still delegate, but as an *efficiency* 1-chunk run, not a parallelism run. Route to Sonnet sub-agent (mechanical edits, boilerplate, clear-pattern work, simple refactors, generation from a tight spec) or Codex (single-file adversarial review, narrow precision fix). The orchestrator (Opus) writes the brief, delegates, reviews the returned diff. Do NOT burn Opus on work that Sonnet or Codex would do better and cheaper.
-- **1–4 all no AND Opus reasoning required** → proceed in-session. Log the call in one line so Sir can override.
+- **Q5 yes (large-surface)** → route THAT chunk (or the whole task if it's a 1-chunk job) to a **1M-context Opus 4.7 subprocess**. Do NOT flip the orchestrator session to 1M — the orchestrator stays on regular 4.7. The chunk runs as a Bash subprocess: `claude -p "<self-contained prompt>" --model 'claude-opus-4-7[1m]' --permission-mode plan`. See "1M Context Routing" for the full pattern.
+- **1–5 all no, but Opus reasoning NOT required** → still delegate, but as an *efficiency* 1-chunk run, not a parallelism run. Route to Sonnet sub-agent (mechanical edits, boilerplate, clear-pattern work, simple refactors, generation from a tight spec) or Codex (single-file adversarial review, narrow precision fix). The orchestrator (Opus) writes the brief, delegates, reviews the returned diff. Do NOT burn Opus on work that Sonnet or Codex would do better and cheaper.
+- **1–5 all no AND Opus reasoning required** → proceed in-session. Log the call in one line so Sir can override.
 
 **What "Opus reasoning required" actually means.** Use Opus in-session for: multi-file design decisions, architectural tradeoffs, synthesising disparate context the sub-agent doesn't have, debugging where the failure mode is ambiguous, reviewing or reconciling work the sub-agents produced, talking to Sir. Do NOT use Opus in-session for: mechanical edits following a clear pattern, boilerplate generation, writing a test from a clear spec, single-file refactors with obvious shape, formatting/lint fixes, dependency bumps. Those go to Sonnet.
 
@@ -38,6 +40,7 @@ You are the **orchestrator**. Your job: decompose, delegate, collect, verify, pr
 > `Delegation triage: 1-chunk Sonnet run — mechanical refactor, no Opus reasoning required, efficiency play.`
 > `Delegation triage: fan-out — 4 independent feature chunks, would burn ~50% main-session context.`
 > `Delegation triage: 1-chunk Codex run — deep algorithm, want fresh-window + adversarial review.`
+> `Delegation triage: 1-chunk 1M-Opus subprocess — read surface is the whole monorepo (~280K tokens), beyond subagent budget.`
 
 This makes the orchestration call visible without bloating the response. Sir gets to redirect early instead of after you've already started reading files.
 
@@ -86,11 +89,12 @@ This makes the orchestration call visible without bloating the response. Sir get
 | **Planning** | Opus 4.7 (Plan subagent) | Subagent | Architecture, multi-file refactor design |
 | **Build** | Sonnet 4.6 (Agent, adaptive thinking) | Fresh per chunk | Parallel independent implementation chunks (multi-file, project-conventions-aware) |
 | **Precision** | Codex GPT-5.5 | Background | Adversarial review, deep algorithms, second opinions |
+| **Large-context** | **Opus 4.7 1M (`claude-opus-4-7[1m]` via CLI subprocess)** | Subprocess (fresh session) | Single chunks whose *read surface* exceeds ~150K tokens: monorepo-wide review, big PDF/transcript ingest, multi-hundred-file analysis, log forensics. Never the orchestrator seat. |
 | **Cheap parallel** | Haiku 4.5 (Agent, `model="haiku"`) | Fresh per task | High-volume narrow tasks at scale: classify/tag, format-convert, bulk mechanical text edits, smoke checks, per-row enrichment |
 | **Lookup** | Haiku 4.5 (Explore subagent) | Subagent | File location, grep-for-symbol, quick searches |
 | **Integration** | Opus 4.7 (main session, in-line) | Stays | runner: `main` chunks — cross-cutting edits, package.json, config wiring, glue between sibling chunks |
 
-**Pricing context (May 2026):** Opus 4.7 $5/$25 per MTok • Sonnet 4.6 $3/$15 • Haiku 4.5 $1/$5 • Codex GPT-5.5 separate billing. Haiku is ~5× cheaper than Sonnet on input — for narrow parallel tasks, the savings compound across chunks. Don't be precious about it; route mechanically suitable work to Haiku without ceremony.
+**Pricing context (May 2026):** Opus 4.7 $5/$25 per MTok • Opus 4.7 1M **$10/$50 per MTok above 200K input** (2× the standard tier — Anthropic's published premium for the 1M window; under 200K input the 1M variant prices the same as base Opus, so the premium only bites when you actually need the extra room) • Sonnet 4.6 $3/$15 • Haiku 4.5 $1/$5 • Codex GPT-5.5 separate billing. Haiku is ~5× cheaper than Sonnet on input — for narrow parallel tasks, the savings compound across chunks. Don't be precious about it; route mechanically suitable work to Haiku without ceremony. The 1M premium is meaningful — only reach for the 1M tier when the read surface genuinely demands it; never as a "just in case" upgrade.
 
 Use `runner: main` sparingly — typically the final chunk in a chain when integration genuinely requires orchestrator context (sibling-chunk awareness, cross-file decisions). Most chunks should be `sonnet-subagent` for code work or `haiku-subagent` for narrow text/data work.
 
@@ -212,6 +216,57 @@ Haiku 4.5 is ~5× cheaper than Sonnet on input and faster end-to-end. For tasks 
 **Fan-out pattern for high-volume Haiku work.** When you have N independent narrow tasks (e.g. 50 content blocks to classify, 30 files to lint-fix, 100 records to enrich), fan out as Haiku subagents in batches of 4–8 in parallel. Shared system prompt = good cache hit rate. Per-chunk verification = trivial schema check. The orchestrator (Opus) collates the structured outputs.
 
 **Anti-pattern:** routing code-chunk work to Haiku to save money. The Sonnet→Haiku cost savings are real but Haiku will silently miss subtleties — wrong null-handling, wrong import order, wrong test framework — that Sonnet catches. False economy. The Haiku tier earns its keep on tasks where the verification surface is *trivial* (schema check, string equality, lint pass), not "looks like working code".
+
+## 1M Context Routing — Opus 4.7 1M as a delegation target (never the orchestrator seat)
+
+**The rule, stated bluntly.** The orchestrator session stays on **regular Opus 4.7** — full stop. 1M Opus is a *target*, not a *seat*. The orchestrator's job (decompose, review diffs, reconcile reviews, talk to Sir) is small-context work that does not benefit from the 1M window, and the premium pricing above 200K input means seating the orchestrator on 1M just to "have headroom" burns cash for zero gain. If the orchestrator session itself is hitting 75%+ context, the right move is **handoff** (cheap, clean, deterministic), not a 1M flip.
+
+**When 1M Opus is the right routing call:**
+
+| Trigger | Why 1M, not Sonnet/Haiku subagent or Agent Teams |
+|---------|--------------------------------------------------|
+| Chunk needs to read >150K tokens of source material in one pass (monorepo-wide refactor analysis, big PDF/transcript ingest, multi-hundred-file audit, days of logs) | Subagent context is bounded by the orchestrator's allowance; Sonnet 4.6 caps below where this needs to be. 1M Opus gives the chunk a fresh full 1M window. |
+| Adversarial review where reviewer needs spec + full codebase + test suite + prior reviews in one context | Same as above — review quality collapses when the reviewer can't hold the whole surface. |
+| Cross-cutting "find every place X is true" sweep over a large corpus | Greps miss semantic patterns; full-context Opus reads catch them. |
+
+**When 1M Opus is NOT the right call (use the cheaper path):**
+
+- Chunk fits comfortably in <150K tokens → regular Sonnet subagent or Codex.
+- Task decomposes into independent sub-units → fan out instead. Decomposition beats brute-force-context every time.
+- You only need keyword/symbol lookup → Haiku Explore subagent + grep.
+- The orchestrator session is full → handoff, not 1M flip.
+
+**Mechanical invocation.** The Agent tool's `model` parameter only accepts `opus|sonnet|haiku` — it cannot directly hit the 1M variant. 1M Opus routes via **Bash subprocess** to the Claude Code CLI:
+
+```bash
+claude -p "$(cat <<'EOF'
+You are a 1M-context delegated chunk. Read surface: ~280K tokens across the listed files.
+
+PROJECT (read-only): /Users/justin/code/sophiie-monorepo
+WORKSPACE (write here, relative paths): /tmp/delegate/<run-id>/chunk-2/workspace
+
+Task: <intent>
+Files to load: <explicit list, OR a glob>
+Deliverables: <files to write>
+Verification: <command to run on completion>
+
+Report: final file list + verification result.
+EOF
+)" \
+  --model 'claude-opus-4-7[1m]' \
+  --permission-mode plan \
+  --add-dir /Users/justin/code/sophiie-monorepo
+```
+
+**Notes on the subprocess shape:**
+
+- `--permission-mode plan` keeps the chunk from prompting for tool approvals; pre-approve via project settings if it needs to write.
+- `--add-dir` grants the chunk read access to the project. Workspace stays in `$RUN_DIR/<chunk-id>/workspace` per the standard contract.
+- No `task-notification` token telemetry from CLI subprocess — capture by scraping the final stdout line or parsing `--output-format json` if you need exact token counts in `state.tsv`.
+- Spawn latency is ~2-4s (process boot + cache warm). Acceptable for a chunk that will run for minutes; not acceptable for fan-out of 10 narrow tasks.
+- Set the runner in the manifest as `opus-1m-cli` (add to enum in `references/manifest-schema.md` on first use). Step 6 fan-out gets a new spawn block for this runner.
+
+**Session escalation (last-resort, rare).** If Sir's *own* session has accumulated irreducible context that handoff would lose (mid-debugging an ambiguous failure, holding cross-file mental state that can't be summarised cleanly), the alternative to handoff is launching a fresh 1M-Opus CLI session and pasting the held context in. State the trade-off out loud: "Sir — orchestrator's at 80%. Handoff loses momentum but stays on regular 4.7. 1M flip preserves momentum but you'll pay the premium tier for the rest of the session. Recommendation: handoff unless the held state is genuinely unsummarisable." Default to handoff; 1M flip needs an explicit yes.
 
 ## Usage
 
@@ -543,15 +598,15 @@ Set `DELEGATE_DEBUG=1` to enable an ERR trap that prints the failing line + comm
 
 **Default behaviour: stay on subagents.** This skill's `sonnet-subagent` / `haiku-subagent` runners cover 95% of fan-out needs — cheaper, ~5-10× faster to spawn, well-understood failure modes, no shared-mailbox footgun. Agent Teams is a *real* escape hatch, not a parallel-by-default mechanism. The bar for reaching for it is genuinely high.
 
-**Reach for Agent Teams ONLY when one of these holds:**
+**Reach for Agent Teams ONLY when one of these holds (and 1M Opus subprocess doesn't already solve it):**
 
-| Trigger | Why subagents fail here |
-|---------|------------------------|
-| A single chunk needs >200k context (loading large codebases, big PDFs, multi-file deep analysis) | Subagent context is bounded; a full Claude Code session has the 1M window |
-| A chunk needs project-scoped MCP servers the orchestrator's session doesn't have | Subagents inherit orchestrator MCP config; can't add chunk-specific servers |
-| A chunk needs different hooks (different security policy, different auto-format, different permission scope) | Subagents share hooks with the orchestrator |
-| The chunk run is long enough that it could outlast the orchestrator's session limit | Subagents die when the orchestrator session dies |
-| Sir explicitly says "use Agent Teams for this" | Direct instruction overrides default |
+| Trigger | Why subagents fail here | First-choice answer |
+|---------|------------------------|---------------------|
+| A single chunk needs >150K context (loading large codebases, big PDFs, multi-file deep analysis) | Subagent context is bounded | **1M Opus CLI subprocess** (see "1M Context Routing"). Agent Teams is the fallback if 1M Opus isn't enough or you need teammate-shaped coordination. |
+| A chunk needs project-scoped MCP servers the orchestrator's session doesn't have | Subagents inherit orchestrator MCP config | Agent Teams (or CLI subprocess — both isolate MCP config) |
+| A chunk needs different hooks (different security policy, different auto-format, different permission scope) | Subagents share hooks with the orchestrator | Agent Teams or CLI subprocess |
+| The chunk run is long enough that it could outlast the orchestrator's session limit | Subagents die when the orchestrator session dies | Agent Teams (independent lifetime) |
+| Sir explicitly says "use Agent Teams for this" | Direct instruction overrides default | Agent Teams |
 
 **State the call out loud when reaching for it.** Like all delegation calls, name the trigger:
 
@@ -561,16 +616,17 @@ Set `DELEGATE_DEBUG=1` to enable an ERR trap that prints the failing line + comm
 
 **No runner integration yet.** Agent Teams is documented but NOT wired into `delegate.sh` as a `runner:` enum value. When a real use case lands (one of the triggers above), the integration work is: (a) add `agent-team` to the runner enum in `references/manifest-schema.md`, (b) add a spawn block to Step 6 alongside the Sonnet/Haiku/Codex examples, (c) decide how `validate`/`audit`/`apply` handle teammate-produced workspaces. Don't speculate-build it before there's a real chunk that needs it — speculative integration rots until first use exposes the wrong assumptions.
 
-**Summoning a terminal CLI subprocess.** Possible via Bash (`claude -p "<prompt>" --model sonnet`), but rarely worth it. Trade-off:
+**Summoning a terminal CLI subprocess.** Possible via Bash (`claude -p "<prompt>" --model <id>`). This is the *only* way to hit the **1M-context Opus variant** (`claude-opus-4-7[1m]`) — Agent tool's `model` param doesn't expose it. See "1M Context Routing" above for the full pattern. Trade-off:
 
 | Subprocess CLI gains | Subprocess CLI costs |
 |----------------------|---------------------|
-| Full 1M-token context window per chunk | Process spawn latency (~2-4s per launch) |
+| Full 1M-token context window per chunk (with `--model 'claude-opus-4-7[1m]'`) | Process spawn latency (~2-4s per launch) |
 | Independent hooks / MCP / settings | No streaming back to orchestrator (must scrape stdout) |
 | True session isolation | No `task-notification` token telemetry; harder to capture |
 | Survives orchestrator session limits | Permission prompts unless `--permission-mode plan` or pre-approved |
+| — | 1M tier costs 2× per MTok above 200K input (pay only when you need the headroom) |
 
-Reach for CLI subprocess only when: (a) the chunk genuinely needs a full 1M context window the subagent can't give it, (b) the chunk needs project-scoped MCP/hooks the orchestrator's session doesn't have, or (c) Agent Teams isn't enabled and you need true session isolation. For everything else, in-session subagents (Sonnet/Haiku) are the right tool. Don't subprocess-spawn out of habit — it's an escape hatch, not a default.
+Reach for CLI subprocess only when: (a) the chunk genuinely needs the 1M context window the subagent can't give it (route to 1M Opus per the dedicated section), (b) the chunk needs project-scoped MCP/hooks the orchestrator's session doesn't have, or (c) Agent Teams isn't enabled and you need true session isolation. For everything else, in-session subagents (Sonnet/Haiku) are the right tool. Don't subprocess-spawn out of habit — it's an escape hatch, not a default.
 
 **One more recent feature worth knowing — Outcomes (research preview).** Claude Managed Agents now supports "Outcomes" — specify a desired end state, the agent loops until achieved. Different shape from this skill's decompose-fan-out-collect flow (which is bounded and explicit). Don't fold Outcomes into the core orchestration loop — it changes the determinism contract. Worth knowing for tasks where the spec is genuinely outcome-shaped ("get all tests passing", "reduce bundle size below 200kb") rather than decomposable.
 
@@ -588,3 +644,6 @@ Reach for CLI subprocess only when: (a) the chunk genuinely needs a full 1M cont
 - Do NOT route code-chunk work to Haiku to save money. Haiku silently misses subtleties (wrong null-handling, wrong imports, wrong test framework) that Sonnet catches. Haiku earns its keep on tasks where the verification surface is *trivial* — schema check, string equality, lint pass — not "looks like working code".
 - Do NOT reflexively enable extended thinking on Sonnet/Haiku. It can hurt intuitive-task performance by ~36%. Reserve for genuinely deliberative subproblems (multi-step symbolic reasoning, math, weighing 3+ valid approaches).
 - Do NOT subprocess-spawn `claude` CLI from Bash as a default fan-out path. In-session subagents cover 95% of the parallel-build need. Subprocess spawn is for full-context-window edge cases or when Agent Teams isn't available.
+- Do NOT seat the orchestrator session on the 1M-context Opus variant. The orchestrator's work — decompose, review diffs, reconcile reviews, talk to Sir — is small-context and gains nothing from the 1M window. Above 200K input the 1M tier prices at 2×, so seating the orchestrator there burns cash for zero benefit. 1M Opus is a *target*, never a *seat*.
+- Do NOT flip to 1M Opus as a substitute for handoff. When the orchestrator session hits 75%+ context, handoff is cheaper, cleaner, and deterministic. The 1M flip is a last-resort escape hatch for genuinely irreducible held context — and requires Sir's explicit yes, not a unilateral call.
+- Do NOT route a chunk to 1M Opus when decomposition would solve it. If a "huge" chunk can be broken into independent sub-units that each fit a Sonnet subagent, decomposition wins on every axis: cost, latency, parallelism, cache efficiency. 1M is for genuinely irreducible read surfaces, not lazy decomposition.
